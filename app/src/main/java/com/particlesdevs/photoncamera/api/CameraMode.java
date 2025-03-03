@@ -12,7 +12,8 @@ public enum CameraMode {
     MOTION(R.string.mode_motion),
     PHOTO(R.string.mode_photo),
     NIGHT(R.string.mode_night),
-    VIDEO(R.string.mode_video);
+    VIDEO(R.string.mode_video),
+    FREEZE(R.string.freeze_mode);
 
     int stringId;
 

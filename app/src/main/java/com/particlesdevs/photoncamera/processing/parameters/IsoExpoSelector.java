@@ -38,123 +38,146 @@ public class IsoExpoSelector {
     }
     private static double mpy1 = 1.0;
     public static ExpoPair GenerateExpoPair(int step, CaptureController captureController) {
-        double mpy = 1.0;
-        ExpoPair pair = new ExpoPair(captureController.mPreviewExposureTime, getEXPLOW(), getEXPHIGH(),
-                captureController.mPreviewIso, getISOLOW(), getISOHIGH(),getISOAnalog());
-        double compensation = Math.pow(2.0,PhotonCamera.getSettings().exposureCompensation);
-        pair.normalizeiso100();
-        pair.ExpoCompensateLower(1.0/compensation);
-        if (PhotonCamera.getSettings().selectedMode == CameraMode.NIGHT)
-        {
-            mpy1 = 7000.0;
-            //if(step%3 == 2) mpy = 1.1;
-            //mpy = mpy*1.5;
-        } else {
-            if(PhotonCamera.getSettings().selectedMode == CameraMode.UNLIMITED){
-                if(step%3 == 2) mpy = 1.5;
-                if(step%3 == 1) mpy = 1.0/1.5;
+        if (PhotonCamera.getSettings().selectedMode == CameraMode.FREEZE) {
+            // For Freeze mode, we use a combination of fast and slow exposures
+            if (step == -1) {
+                // Return base exposure for preview
+                return new ExpoPair(captureController.mPreviewExposureTime, captureController.mPreviewIso);
             }
-             /*else if(PhotonCamera.getSettings().alignAlgorithm == 1){
-                if(step%3 == 1) {
-                    pair.curlayer = ExpoPair.exposureLayer.High;
-                    mpy = 1.0/1.5;
+            
+            // Calculate exposure times for burst sequence
+            long baseExposure = captureController.mPreviewExposureTime;
+            int baseIso = captureController.mPreviewIso;
+            
+            if (step == 0) {
+                // Fast exposure to freeze motion
+                return new ExpoPair(baseExposure / 4, baseIso * 2);
+            } else if (step == 1) {
+                // Base exposure
+                return new ExpoPair(baseExposure, baseIso);
+            } else {
+                // Longer exposures for detail in static areas
+                return new ExpoPair(baseExposure * (step - 1), baseIso / 2);
+            }
+        } else {
+            double mpy = 1.0;
+            ExpoPair pair = new ExpoPair(captureController.mPreviewExposureTime, getEXPLOW(), getEXPHIGH(),
+                    captureController.mPreviewIso, getISOLOW(), getISOHIGH(),getISOAnalog());
+            double compensation = Math.pow(2.0,PhotonCamera.getSettings().exposureCompensation);
+            pair.normalizeiso100();
+            pair.ExpoCompensateLower(1.0/compensation);
+            if (PhotonCamera.getSettings().selectedMode == CameraMode.NIGHT)
+            {
+                mpy1 = 7000.0;
+                //if(step%3 == 2) mpy = 1.1;
+                //mpy = mpy*1.5;
+            } else {
+                if(PhotonCamera.getSettings().selectedMode == CameraMode.UNLIMITED){
+                    if(step%3 == 2) mpy = 1.5;
+                    if(step%3 == 1) mpy = 1.0/1.5;
                 }
-                if(step%3 == 2) {
-                    pair.curlayer = ExpoPair.exposureLayer.Normal;
-                    mpy = 1.0;
-                }
-                if(step%3 == 0) {
-                    pair.curlayer = ExpoPair.exposureLayer.Low;
-                    mpy = 1.5;
-                }
+                 /*else if(PhotonCamera.getSettings().alignAlgorithm == 1){
+                    if(step%3 == 1) {
+                        pair.curlayer = ExpoPair.exposureLayer.High;
+                        mpy = 1.0/1.5;
+                    }
+                    if(step%3 == 2) {
+                        pair.curlayer = ExpoPair.exposureLayer.Normal;
+                        mpy = 1.0;
+                    }
+                    if(step%3 == 0) {
+                        pair.curlayer = ExpoPair.exposureLayer.Low;
+                        mpy = 1.5;
+                    }
+                }*/
+                mpy1 = 3000.0;
+            }
+            if(PhotonCamera.getSettings().selectedMode == CameraMode.MOTION){
+                //mpy1 = 0.0;
+                pair.denormalizeSystem();
+                return pair;
+            }
+            if (pair.exposure < ExposureIndex.sec / 40 && pair.normalizedIso() > 90.0/mpy1) {
+                pair.ReduceIso();
+            }
+            if (pair.exposure < ExposureIndex.sec / 13 && pair.normalizedIso() > 750.0/mpy1) {
+                pair.ReduceIso();
+            }
+            if (pair.exposure < ExposureIndex.sec / 8 && pair.normalizedIso() > 1500.0/mpy1) {
+                if (step != baseFrame || !PhotonCamera.getSettings().eisPhoto) pair.ReduceIso();
+            }
+            if (pair.exposure < ExposureIndex.sec / 8 && pair.normalizedIso() > 1500.0/mpy1) {
+                if (step != baseFrame || !PhotonCamera.getSettings().eisPhoto) pair.ReduceIso(1.25);
+            }
+            if (pair.normalizedIso() >= 12700.0/mpy1) {
+                pair.ReduceIso();
+            }
+            if (CaptureController.getTargetFormat() == CaptureController.RAW_FORMAT) {
+                pair.ExpoCompensateLower(mpy);
+            }
+            if (useTripod) {
+                pair.UseIso(Math.max(pair.isoanalog/6.0,101));
+            }
+
+            double currentManExp = captureController.getParamController().getCurrentExposureValue();
+            double currentManISO = captureController.getParamController().getCurrentISOValue();
+            pair.exposure = currentManExp != 0 ? (long) currentManExp : pair.exposure;
+            pair.iso = currentManISO != 0 ? (int) currentManISO : pair.iso;
+            pair.curlayer = ExpoPair.exposureLayer.Normal;
+            /*if (step%patternSize == 1 && HDR) {
+                pair.ExpoCompensateLower(2.0 / 1.0);
+                pair.curlayer = ExpoPair.exposureLayer.Low;
             }*/
-            mpy1 = 3000.0;
-        }
-        if(PhotonCamera.getSettings().selectedMode == CameraMode.MOTION){
-            //mpy1 = 0.0;
+            /*if(HDR) {
+                pair.ExpoCompensateLowerExpo(2.f);
+                pair.ExpoCompensateLower(1.f/2.f);
+            }*/
+            if (step%patternSize == 0 && HDR) {
+                //pair.layerMpy = 1.5f+(float)Math.abs(Math.random())*1.0f;
+                //pair.layerMpy = 1.f/1.5f;
+                pair.layerMpy = 1.f;
+                pair.ExpoCompensateLowerExpo(1.0 / pair.layerMpy);
+                pair.curlayer = ExpoPair.exposureLayer.Normal;
+            }
+            if ((step%patternSize == 1) && HDR) {
+                pair.layerMpy = 4.f;
+                pair.ExpoCompensateLowerExpo(1.0 / pair.layerMpy);
+                pair.curlayer = ExpoPair.exposureLayer.High;
+            }
+            if (step%patternSize == 2 && HDR) {
+                //pair.layerMpy = 1.f/1.5f;
+                pair.layerMpy = 4.f;
+                pair.ExpoCompensateLowerExpo(1.0 / pair.layerMpy);
+                pair.curlayer = ExpoPair.exposureLayer.High;
+            }
+
+            if (pair.exposure < ExposureIndex.sec / 90 && PhotonCamera.getSettings().eisPhoto) {
+                //HDR = true;
+            }
+            if (step%patternSize != 0 && HDR) {
+                if (pair.normalizedIso() <= 240.0/mpy1 && pair.exposure > ExposureIndex.sec / 70.0/mpy1 && PhotonCamera.getSettings().eisPhoto) {
+                    pair.ReduceExpo();
+                }
+                if (pair.normalizedIso() <= 500.0/mpy1 && pair.exposure > ExposureIndex.sec / 50.0/mpy1 && PhotonCamera.getSettings().eisPhoto) {
+                    pair.ReduceExpo();
+                }
+                if (pair.exposure < ExposureIndex.sec * 3.00 && pair.exposure > ExposureIndex.sec / 3 && pair.normalizedIso() < 3200.0/mpy1 && PhotonCamera.getSettings().eisPhoto) {
+                    pair.FixedExpo(1.0 / 8);
+                    if (pair.exposure > ExposureIndex.sec / 3) pair.ReduceExpo();
+                    if (pair.normalizeCheck())
+                        PhotonCamera.showToast("Wrong parameters: iso:" + pair.iso + " exp:" + pair.exposure);
+                }
+            }
+            if(step != -1) {
+                if (step == 0) pairs.clear();
+                if (pairs.size() < patternSize) {
+                    Log.d(TAG, "Added pair:" + pairs.size());
+                    pairs.add(pair);
+                }
+            }
             pair.denormalizeSystem();
             return pair;
         }
-        if (pair.exposure < ExposureIndex.sec / 40 && pair.normalizedIso() > 90.0/mpy1) {
-            pair.ReduceIso();
-        }
-        if (pair.exposure < ExposureIndex.sec / 13 && pair.normalizedIso() > 750.0/mpy1) {
-            pair.ReduceIso();
-        }
-        if (pair.exposure < ExposureIndex.sec / 8 && pair.normalizedIso() > 1500.0/mpy1) {
-            if (step != baseFrame || !PhotonCamera.getSettings().eisPhoto) pair.ReduceIso();
-        }
-        if (pair.exposure < ExposureIndex.sec / 8 && pair.normalizedIso() > 1500.0/mpy1) {
-            if (step != baseFrame || !PhotonCamera.getSettings().eisPhoto) pair.ReduceIso(1.25);
-        }
-        if (pair.normalizedIso() >= 12700.0/mpy1) {
-            pair.ReduceIso();
-        }
-        if (CaptureController.getTargetFormat() == CaptureController.RAW_FORMAT) {
-            pair.ExpoCompensateLower(mpy);
-        }
-        if (useTripod) {
-            pair.UseIso(Math.max(pair.isoanalog/6.0,101));
-        }
-
-        double currentManExp = captureController.getParamController().getCurrentExposureValue();
-        double currentManISO = captureController.getParamController().getCurrentISOValue();
-        pair.exposure = currentManExp != 0 ? (long) currentManExp : pair.exposure;
-        pair.iso = currentManISO != 0 ? (int) currentManISO : pair.iso;
-        pair.curlayer = ExpoPair.exposureLayer.Normal;
-        /*if (step%patternSize == 1 && HDR) {
-            pair.ExpoCompensateLower(2.0 / 1.0);
-            pair.curlayer = ExpoPair.exposureLayer.Low;
-        }*/
-        /*if(HDR) {
-            pair.ExpoCompensateLowerExpo(2.f);
-            pair.ExpoCompensateLower(1.f/2.f);
-        }*/
-        if (step%patternSize == 0 && HDR) {
-            //pair.layerMpy = 1.5f+(float)Math.abs(Math.random())*1.0f;
-            //pair.layerMpy = 1.f/1.5f;
-            pair.layerMpy = 1.f;
-            pair.ExpoCompensateLowerExpo(1.0 / pair.layerMpy);
-            pair.curlayer = ExpoPair.exposureLayer.Normal;
-        }
-        if ((step%patternSize == 1) && HDR) {
-            pair.layerMpy = 4.f;
-            pair.ExpoCompensateLowerExpo(1.0 / pair.layerMpy);
-            pair.curlayer = ExpoPair.exposureLayer.High;
-        }
-        if (step%patternSize == 2 && HDR) {
-            //pair.layerMpy = 1.f/1.5f;
-            pair.layerMpy = 4.f;
-            pair.ExpoCompensateLowerExpo(1.0 / pair.layerMpy);
-            pair.curlayer = ExpoPair.exposureLayer.High;
-        }
-
-        if (pair.exposure < ExposureIndex.sec / 90 && PhotonCamera.getSettings().eisPhoto) {
-            //HDR = true;
-        }
-        if (step%patternSize != 0 && HDR) {
-            if (pair.normalizedIso() <= 240.0/mpy1 && pair.exposure > ExposureIndex.sec / 70.0/mpy1 && PhotonCamera.getSettings().eisPhoto) {
-                pair.ReduceExpo();
-            }
-            if (pair.normalizedIso() <= 500.0/mpy1 && pair.exposure > ExposureIndex.sec / 50.0/mpy1 && PhotonCamera.getSettings().eisPhoto) {
-                pair.ReduceExpo();
-            }
-            if (pair.exposure < ExposureIndex.sec * 3.00 && pair.exposure > ExposureIndex.sec / 3 && pair.normalizedIso() < 3200.0/mpy1 && PhotonCamera.getSettings().eisPhoto) {
-                pair.FixedExpo(1.0 / 8);
-                if (pair.exposure > ExposureIndex.sec / 3) pair.ReduceExpo();
-                if (pair.normalizeCheck())
-                    PhotonCamera.showToast("Wrong parameters: iso:" + pair.iso + " exp:" + pair.exposure);
-            }
-        }
-        if(step != -1) {
-            if (step == 0) pairs.clear();
-            if (pairs.size() < patternSize) {
-                Log.d(TAG, "Added pair:" + pairs.size());
-                pairs.add(pair);
-            }
-        }
-        pair.denormalizeSystem();
-        return pair;
     }
 
     public static double getMPY() {
@@ -338,8 +361,10 @@ public class IsoExpoSelector {
         }
 
         public void ReduceIso(double k) {
-            iso /= k;
-            exposure *= k;
+            Log.d(TAG, "ExpoReducing iso:" + iso + " expo:" + ExposureIndex.sec2string(ExposureIndex.time2sec(exposure)));
+            iso *= k;
+            exposure /= k;
+            Log.d(TAG, "ExpoReducing done iso:" + iso + " expo:" + ExposureIndex.sec2string(ExposureIndex.time2sec(exposure)));
         }
 
         public void ReduceExpo() {
