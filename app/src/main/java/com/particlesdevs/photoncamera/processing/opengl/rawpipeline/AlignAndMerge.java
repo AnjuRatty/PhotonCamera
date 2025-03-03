@@ -102,82 +102,28 @@ public class AlignAndMerge extends Node {
     GLTexture medium;
     GLTexture small;
     GLTexture vsmall;
-    private void Align(int i) {
-        //startT();
-        glProg.setDefine("SCANSIZE",tileSize* overScan);
-        glProg.setDefine("TILESIZE",tileSize);
-        glProg.setDefine("PREVSCALE",0);
-        glProg.setDefine("INPUTSIZE",brTex128.mSize);
-        glProg.setDefine("LOWPASSCOMBINE",false);
-        glProg.setDefine("FLOWACT",opticalFlowActivity);
-
-        glProg.useAssetProgram("pyramidalign2");
-        glProg.setTexture("InputBuffer",brTex128);
-        glProg.setTexture("MainBuffer",BaseFrame128);
-
-        glProg.setTexture("DiffHVRef",DiffHVRef128);
-
-
-        glProg.drawBlocks(vsmall);
-
-        glProg.setDefine("SCANSIZE",tileSize* overScan);
-        glProg.setDefine("TILESIZE",tileSize);
-        glProg.setDefine("PREVSCALE",4);
-        glProg.setDefine("INPUTSIZE",brTex32.mSize);
-        glProg.setDefine("LUCKYINPUT",useLuckyLayers);
-        glProg.setDefine("LOWPASSCOMBINE",false);
-        glProg.setDefine("FLOWACT",opticalFlowActivity);
-        glProg.setDefine("LOWPASSK",4);
-
-        glProg.useAssetProgram("pyramidalign2");
-        glProg.setTexture("AlignVectors",vsmall);
-        glProg.setTexture("InputBuffer", brTex32);
-        glProg.setTexture("MainBuffer", BaseFrame32);
-
-        glProg.setTexture("DiffHVRef",DiffHVRef32);
-
-
-        glProg.drawBlocks(small);
-        glProg.setDefine("SCANSIZE",tileSize* overScan);
-        glProg.setDefine("TILESIZE",tileSize);
-        glProg.setDefine("PREVSCALE",4);
-        glProg.setDefine("INPUTSIZE",brTex8.mSize);
-        glProg.setDefine("LUCKYINPUT",useLuckyLayers);
-        glProg.setDefine("LOWPASSCOMBINE",false);
-        glProg.setDefine("FLOWACT",opticalFlowActivity);
-        glProg.setDefine("LOWPASSK",16);
-
-        glProg.useAssetProgram("pyramidalign2");
-
-        glProg.setTexture("AlignVectors",small);
-
-        glProg.setTexture("InputBuffer", brTex8);
-        glProg.setTexture("MainBuffer", BaseFrame8);
-
-        glProg.setTexture("DiffHVRef",DiffHVRef8);
-
-        glProg.drawBlocks(medium);
-        //small.close();
-        glProg.setDefine("SCANSIZE",tileSize* overScan);
-        glProg.setDefine("TILESIZE",tileSize);
-        glProg.setDefine("PREVSCALE",4);
-        glProg.setDefine("INPUTSIZE",brTex2.mSize);
-        glProg.setDefine("LUCKYINPUT",useLuckyLayers);
-        glProg.setDefine("LOWPASSCOMBINE",false);
-        glProg.setDefine("FLOWACT",opticalFlowActivity);
-        glProg.setDefine("LOWPASSK",64);
-
-        glProg.useAssetProgram("pyramidalign2");
-
-        glProg.setTexture("AlignVectors",medium);
-        glProg.setTexture("InputBuffer", brTex2);
-        glProg.setTexture("MainBuffer", BaseFrame2);
-        glProg.setTexture("DiffHVRef",DiffHVRef2);
-
-
-        glProg.drawBlocks(alignVectors[i-1],alignVectors[i-1].mSize);
-
-        //alignVectorsTemporal[i-1] = alignVectors[i-1].textureBuffer(alignVectors[i-1].mFormat,true).asShortBuffer();
+    private void Align(int num) {
+        // Initialize pyramid levels
+        int pyramidLevels = 3;
+        GLTexture[] referencePyramid = buildPyramid(BaseFrame2, pyramidLevels);
+        GLTexture[] targetPyramid = buildPyramid(brTex2, pyramidLevels);
+        
+        // Perform hierarchical alignment
+        GLTexture currentAlignment = alignVectors[num-1];
+        for (int level = pyramidLevels - 1; level >= 0; level--) {
+            optimizedBlockMatch(referencePyramid[level], targetPyramid[level], currentAlignment);
+            if (level > 0) {
+                // Upscale alignment for next level
+                currentAlignment = upscaleAlignment(currentAlignment);
+            }
+        }
+        
+        // Store alignment for temporal coherence
+        previousAlignmentVector = currentAlignment;
+        
+        // Clean up
+        for (GLTexture tex : referencePyramid) tex.close();
+        for (GLTexture tex : targetPyramid) tex.close();
     }
 
     private void Weights() {
@@ -317,6 +263,7 @@ public class AlignAndMerge extends Node {
     boolean medianFilterPyramid = true;
     float opticalFlowActivity = -2.0f;
     float gradientMapShift =  0.2f;
+    GLTexture previousAlignmentVector;
     @Override
     public void Run() {
         tileSize = getTuning("TileSize",tileSize);
@@ -424,5 +371,43 @@ public class AlignAndMerge extends Node {
         BaseFrame128.close();
         Log.d("AlignAndMerge", "AlignmentAndMerge elapsed time:" + (System.currentTimeMillis() - time) + " ms");
         WorkingTexture = RawOutput(Output);
+    }
+
+    private void optimizedBlockMatch(GLTexture reference, GLTexture target, GLTexture alignmentOutput) {
+        glProg.setDefine("TILESIZE", "(" + tileSize + ")");
+        glProg.setDefine("SEARCH_RADIUS", "(32)");  // Adaptive search radius
+        glProg.setDefine("EARLY_TERMINATION", "0.95"); // Early termination threshold
+        
+        glProg.useAssetProgram("blockMatch");
+        glProg.setTexture("ReferenceFrame", reference);
+        glProg.setTexture("TargetFrame", target);
+        
+        // Add temporal coherence from previous frame alignment
+        if (previousAlignmentVector != null) {
+            glProg.setTexture("PreviousAlignment", previousAlignmentVector);
+            glProg.setVar("usePreviousAlignment", 1.0f);
+        }
+        
+        // Add confidence weighting based on local contrast and noise
+        glProg.setVar("contrastWeight", 1.0f);
+        glProg.setVar("noiseWeight", 0.5f);
+        
+        glProg.drawBlocks(alignmentOutput);
+    }
+
+    private GLTexture[] buildPyramid(GLTexture base, int levels) {
+        GLTexture[] pyramid = new GLTexture[levels];
+        pyramid[0] = base;
+        for (int i = 1; i < levels; i++) {
+            pyramid[i] = new GLTexture(new Point(pyramid[i-1].mSize.x/2, pyramid[i-1].mSize.y/2, pyramid[i-1].mFormat), pyramid[i-1].mFormat, null);
+            glUtils.interpolate(pyramid[i-1], pyramid[i], 0.5f);
+        }
+        return pyramid;
+    }
+
+    private GLTexture upscaleAlignment(GLTexture alignment) {
+        GLTexture upscaled = new GLTexture(new Point(alignment.mSize.x*2, alignment.mSize.y*2, alignment.mFormat), alignment.mFormat, null);
+        glUtils.interpolate(alignment, upscaled, 2.0f);
+        return upscaled;
     }
 }
